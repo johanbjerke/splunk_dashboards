@@ -1,0 +1,282 @@
+<form version="1.1">
+  <label>MITRE ATT&amp;CK Technique Content and Data Source Drilldown</label>
+  <fieldset submitButton="false">
+    <input type="multiselect" token="MITRE_Technique">
+      <label>ATT&amp;CK Techniques</label>
+      <fieldForLabel>mitre_technique_combined</fieldForLabel>
+      <fieldForValue>mitre_technique</fieldForValue>
+      <search>
+        <query>| inputlookup mitre_enterprise_list
+                | eval mitre_technique_combined = TechniqueIdCombined." - ".if('Sub_Technique'="-",Technique,'Sub_Technique')
+                | eval mitre_technique=mitre_technique_combined 
+                | fields mitre_technique_combined mitre_technique
+| append 
+                [| inputlookup mitre_technique_lists.csv 
+                | rename List AS "mitre_technique_combined", Techniques AS "mitre_technique" 
+                | fields mitre_technique_combined mitre_technique 
+                | eval mitre_technique=split(mitre_technique,",") 
+                | mvexpand mitre_technique 
+                | lookup mitre_enterprise_list TechniqueIdCombined AS mitre_technique OUTPUT Technique 
+                | eval Technique=mvdedup(Technique) 
+                | eval mitre_technique=mitre_technique." - ".Technique 
+                | fields mitre_technique_combined mitre_technique 
+                | mvcombine mitre_technique delim="," 
+                | nomv mitre_technique 
+                | eval mitre_technique="0_".mitre_technique
+                    ]
+| sort 0 "mitre_technique" 
+            | eval mitre_technique=if(like(mitre_technique,"0_%"),mvindex(split(mitre_technique,"0_"),1), mitre_technique) 
+            | dedup mitre_technique
+            | where mitre_technique!="None"</query>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </search>
+      <choice value="">Any</choice>
+      <default>"T1486 - Data Encrypted for Impact,T1490 - Inhibit System Recovery,T1027 - Obfuscated Files or Information,T1047 - Windows Management Instrumentation,T1036 - Masquerading,T1059 - Command and Scripting Interpreter,T1562 - Impair Defenses,T1112 - Modify Registry,T1204 - User Execution,T1055 - Process Injection"</default>
+      <change>
+        <condition label="Any">
+          <set token="mitre_technique_ids">*</set>
+          <eval token="MITRE_Technique2">$form.MITRE_Technique$</eval>
+          <eval token="form.MITRE_Technique2">$form.MITRE_Technique$</eval>
+        </condition>
+        <condition label="*">
+          <eval token="mitre_technique_ids">replace(replace(mvjoin($form.MITRE_Technique$,","), " - [^,]*", ""),"^,","")</eval>
+          <eval token="MITRE_Technique2">$form.MITRE_Technique$</eval>
+          <eval token="form.MITRE_Technique2">$form.MITRE_Technique$</eval>
+        </condition>
+      </change>
+      <delimiter> </delimiter>
+    </input>
+    <input type="multiselect" token="mitre_platforms">
+      <label>ATT&amp;CK Platform</label>
+      <fieldForLabel>platforms</fieldForLabel>
+      <fieldForValue>platforms</fieldForValue>
+      <delimiter>,</delimiter>
+      <change>
+        <eval token="deeplink_mitre_platforms">mvjoin(split(replace(replace('form.mitre_platforms'," ","_"),"\"",""),","),"|")</eval>
+        <eval token="modified_mitre_platforms">mvjoin('form.mitre_platforms',"\",\"")</eval>
+      </change>
+      <search>
+        <query>| inputlookup mitre_enterprise_list
+| fields Platforms
+| eval platforms=split(Platforms,"|")
+| stats count by platforms
+| fields platforms
+| sort platforms</query>
+      </search>
+      <choice value="*">Enterprise</choice>
+      <choice value="&quot;Google Workspace,IaaS,Office 365,SaaS,Azure AD&quot;">Cloud</choice>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Techniques and Data Sources</title>
+      <table>
+        <search>
+          <query>| inputlookup mitre_enterprise_list 
+| eval "Platforms"=split(Platforms,"|") 
+| search TechniqueIdCombined IN($mitre_technique_ids$) AND Platforms IN("$modified_mitre_platforms$")
+
+
+| eval "Threat Group Count"=mvcount(split(Threat_Groups,"|")) 
+| eval TechniqueCombined=if(Sub_Technique="-", Technique, Sub_Technique) 
+
+
+
+```Add content counts```
+| eval App="Any"
+| lookup mitre_environment_count App Tactic Technique "Sub-Technique" AS TechniqueCombined OUTPUT Active Available "Needs data"
+| eval IsSubTechnique="No"
+| lookup mitre_environment_count App Tactic Technique "Technique" AS TechniqueCombined IsSubTechnique OUTPUTNEW Active Available "Needs data"
+```END Add content counts```
+
+| eval "Detection Priority By Threat Group"='Threat Group Count'-'Active'
+| table TechniqueIdCombined TechniqueCombined Tactic "Threat Group Count" Platforms Data_Sources Active Available "Needs data" 
+| eval Data_Sources=split(Data_Sources,"|")
+| rename TechniqueIdCombined AS Id 
+| rename TechniqueCombined AS Name 
+| rename Data_Sources AS "ATT&amp;CK Data Sources"
+| rename Platforms AS "ATT&amp;CK Platforms"
+| rename "Active" AS "Detections (Active)"
+| rename "Available" AS "Detections (Available)"
+| rename "Needs data" AS "Detections (Needs data)"
+| sort - "Threat Group Count" 
+| dedup Id
+
+```Add Detections from STRT repo ```
+| join  type=outer Id [
+| ssedata config="Splunk_Research_Detections"
+| eval detections=json_array_to_mv(detections)
+| table detections
+| mvexpand detections
+| dedup detections
+| spath input=detections
+| fields - detections
+
+``` Extract proper datamodel ```
+| rex field=search ".*datamodel(=\"|:\"|\(\"|\s|:|=)(\"|)(?&lt;datamodel&gt;[a-z,A-Z,_]*)"
+| rex field=search ".*datamodel(=\"|:\"|\(\"|\s|:|=)(\"|)[a-z,A-Z,_]*(\"|)\.(\"|)(?&lt;nodeName&gt;[a-z,A-Z,_]*)"
+| eval datamodel=if(isnotnull(nodeName), datamodel.".".nodeName, datamodel)
+``` END Extract proper datamodel ```
+| eval DataSourceMacro=if(isnull('datamodel') AND 'tags.required_fields{}'!="none",mvindex('macros{}.name',0),null())
+| lookup SSE-STRT-macros-to-data_source_categories macro AS DataSourceMacro OUTPUT sourcetype AS Sourcetype, source AS DataSourceSource
+| table name tags.analytic_story{} type search Sourcetype DataSourceSource datamodel{} tags.required_fields{} tags.mitre_attack_id{} tags.supported_tas{}  splunk_app_enrichment{}.name  splunk_app_enrichment{}.urlsource date
+| rename tags.*{} AS *
+| rename *{} AS *
+| rename splunk_app_enrichment{}.name AS supported_tas_name
+| rename splunk_app_enrichment{}.urlsource AS supported_tas_url
+
+| table mitre_attack_id datamodel supported_tas Sourcetype DataSourceSource required_fields
+| stats delim="|" values(*) AS * BY mitre_attack_id
+| rename mitre_attack_id AS Id
+| rename required_fields as "Detections Required Fields"
+| rename datamodel as "Detections Datamodel"
+| rename Sourcetype as "Detections Sourcetype"
+| rename DataSourceSource as "Detections Source"
+| rename supported_tas as "Supported Add-ons"
+]
+```END Add Detections from STRT repo ```
+| foreach "Detections Datamodel" "Detections Source" "Detections Sourcetype"  "Supported Add-ons"
+[
+| eval "&lt;&lt;FIELD&gt;&gt;"=mvsort(split('&lt;&lt;FIELD&gt;&gt;',"|"))
+]
+
+| table Id Name Tactic "Threat Group Count" "ATT&amp;CK Platforms" "ATT&amp;CK Data Sources" "Detections (Active)" "Detections (Available)" "Detections (Needs data)" "Detections Datamodel" "Detections Sourcetype" "Detections Source" * "Detections Required Fields"</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+          <sampleRatio>1</sampleRatio>
+        </search>
+        <option name="count">100</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">cell</option>
+        <option name="percentagesRow">false</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">true</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">false</option>
+        <format type="color" field="Tactic">
+          <colorPalette type="sharedList"></colorPalette>
+          <scale type="sharedCategory"></scale>
+        </format>
+        <format type="color" field="Detections (Active)">
+          <colorPalette type="minMidMax" maxColor="#53A051" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Detections (Available)">
+          <colorPalette type="minMidMax" maxColor="#53A051" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Detections (Needs data)">
+          <colorPalette type="minMidMax" maxColor="#53A051" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <drilldown>
+          <set token="drilldown_technique">$row.Id$</set>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Content for ATT&amp;CK Technique $drilldown_technique$</title>
+      <table>
+        <search>
+          <query>| ssedata config="Splunk_Research_Detections"
+| eval detections=json_array_to_mv(detections)
+| table detections
+| mvexpand detections
+| dedup detections
+| spath input=detections
+| fields - detections
+
+``` Extract proper datamodel ```
+| rex field=search ".*datamodel(=\"|:\"|\(\"|\s|:|=)(\"|)(?&lt;datamodel&gt;[a-z,A-Z,_]*)"
+| rex field=search ".*datamodel(=\"|:\"|\(\"|\s|:|=)(\"|)[a-z,A-Z,_]*(\"|)\.(\"|)(?&lt;nodeName&gt;[a-z,A-Z,_]*)"
+| eval datamodel=if(isnotnull(nodeName), datamodel.".".nodeName, datamodel)
+``` END Extract proper datamodel ```
+
+| eval DataSourceMacro=if(isnull('datamodel') AND 'tags.required_fields{}'!="none",mvindex('macros{}.name',0),null())
+| lookup SSE-STRT-macros-to-data_source_categories macro AS DataSourceMacro OUTPUT sourcetype AS Sourcetype, source AS DataSourceSource
+| table name tags.analytic_story{} type search description Sourcetype DataSourceSource datamodel{} tags.required_fields{} tags.mitre_attack_id{} tags.supported_tas{}  splunk_app_enrichment{}.name  splunk_app_enrichment{}.urlsource tags.dataset{} date
+| rename tags.*{} AS *
+| rename *{} AS *
+| rename splunk_app_enrichment{}.name AS supported_tas_name
+| rename splunk_app_enrichment{}.urlsource AS supported_tas_url
+
+| table name description analytic_story search mitre_attack_id datamodel supported_tas Sourcetype DataSourceSource required_fields
+| rename mitre_attack_id AS Id
+| rename analytic_story as "Analytic Story"
+| rename required_fields as "Detections Required Fields"
+| rename datamodel as "Detections Datamodel"
+| rename Sourcetype as "Detections Sourcetype"
+| rename DataSourceSource as "Detections Source"
+| rename supported_tas as "Supported Add-ons"
+
+```END Add Detections from STRT repo ```
+
+
+| search Id IN ($drilldown_technique$)</query>
+          <earliest>-24h@h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Top 20 ATT&amp;CK Data Sources</title>
+      <chart>
+        <search>
+          <query>| inputlookup mitre_enterprise_list 
+| eval "Platforms"=split(Platforms,"|") 
+
+
+| eval "Threat Group Count"=mvcount(split(Threat_Groups,"|")) 
+| eval TechniqueCombined=if(Sub_Technique="-", Technique, Sub_Technique) 
+
+
+
+```Add content counts```
+| eval App="Any"
+| lookup mitre_environment_count App Tactic Technique "Sub-Technique" AS TechniqueCombined OUTPUT Active Available "Needs data"
+| eval IsSubTechnique="No"
+| lookup mitre_environment_count App Tactic Technique "Technique" AS TechniqueCombined IsSubTechnique OUTPUTNEW Active Available "Needs data"
+```END Add content counts```
+
+| eval "Detection Priority By Threat Group"='Threat Group Count'-'Active'
+| table TechniqueIdCombined TechniqueCombined Tactic "Threat Group Count" Platforms Data_Sources Active Available "Needs data" 
+| eval Data_Sources=split(Data_Sources,"|")
+| rename TechniqueIdCombined AS Id 
+| rename TechniqueCombined AS Name 
+| rename Data_Sources AS "ATT&amp;CK Data Sources"
+| rename Platforms AS "ATT&amp;CK Platforms"
+| rename "Active" AS "Detections (Active)"
+| rename "Available" AS "Detections (Available)"
+| rename "Needs data" AS "Detections (Needs data)"
+| sort - "Threat Group Count" 
+| dedup Id
+
+
+| table Id Name Tactic "Threat Group Count" "ATT&amp;CK Platforms" "ATT&amp;CK Data Sources"  
+| stats values(*) AS * BY "ATT&amp;CK Data Sources"
+| search "ATT&amp;CK Data Sources"!="-"
+| eval "Threat Group Count"=sum('Threat Group Count')
+| eval Techniques=mvcount(Id)
+| fields - Id Name Tactic "ATT&amp;CK Platforms"
+| sort - "Threat Group Count"
+| head 20</query>
+          <earliest>-24h@h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">-45</option>
+        <option name="charting.chart">column</option>
+        <option name="charting.drilldown">none</option>
+        <option name="height">564</option>
+      </chart>
+    </panel>
+  </row>
+</form>
