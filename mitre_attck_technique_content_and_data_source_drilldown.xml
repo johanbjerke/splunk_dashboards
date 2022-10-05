@@ -1,5 +1,9 @@
 <form version="1.1">
   <label>MITRE ATT&amp;CK Technique Content and Data Source Drilldown</label>
+  <init>
+    <set token="mitre_technique_ids">*</set>
+    <set token="modified_mitre_platforms">*</set>
+  </init>
   <fieldset submitButton="false">
     <input type="multiselect" token="MITRE_Technique">
       <label>ATT&amp;CK Techniques</label>
@@ -32,7 +36,7 @@
         <latest>now</latest>
       </search>
       <choice value="">Any</choice>
-      <default>"T1486 - Data Encrypted for Impact,T1490 - Inhibit System Recovery,T1027 - Obfuscated Files or Information,T1047 - Windows Management Instrumentation,T1036 - Masquerading,T1059 - Command and Scripting Interpreter,T1562 - Impair Defenses,T1112 - Modify Registry,T1204 - User Execution,T1055 - Process Injection"</default>
+      <default></default>
       <change>
         <condition label="Any">
           <set token="mitre_technique_ids">*</set>
@@ -46,6 +50,7 @@
         </condition>
       </change>
       <delimiter> </delimiter>
+      <initialValue></initialValue>
     </input>
     <input type="multiselect" token="mitre_platforms">
       <label>ATT&amp;CK Platform</label>
@@ -53,8 +58,12 @@
       <fieldForValue>platforms</fieldForValue>
       <delimiter>,</delimiter>
       <change>
-        <eval token="deeplink_mitre_platforms">mvjoin(split(replace(replace('form.mitre_platforms'," ","_"),"\"",""),","),"|")</eval>
-        <eval token="modified_mitre_platforms">mvjoin('form.mitre_platforms',"\",\"")</eval>
+        <condition label="Enterprise">
+            <eval token="modified_mitre_platforms">*</eval>
+        </condition>
+        <condition label="*">
+            <eval token="modified_mitre_platforms">mvjoin($form.mitre_platforms$,"\",\"")</eval>
+        </condition>
       </change>
       <search>
         <query>| inputlookup mitre_enterprise_list
@@ -74,6 +83,7 @@
     <panel>
       <title>Techniques and Data Sources</title>
       <table>
+        <title>Click to drilldown to Splunk Security Content linked to the ATT&amp;CK Technique</title>
         <search>
           <query>| inputlookup mitre_enterprise_list 
 | eval "Platforms"=split(Platforms,"|") 
@@ -152,7 +162,6 @@
         <option name="dataOverlayMode">none</option>
         <option name="drilldown">cell</option>
         <option name="percentagesRow">false</option>
-        <option name="refresh.display">progressbar</option>
         <option name="rowNumbers">true</option>
         <option name="totalsRow">false</option>
         <option name="wrap">false</option>
